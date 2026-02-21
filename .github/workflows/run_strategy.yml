@@ -2,29 +2,38 @@ name: Run Strategy Monthly
 
 on:
   schedule:
-    - cron: "0 13 1 * *"
-  workflow_dispatch:
+    - cron: "0 12 L * *"   # Runs at 12:00 PM UTC (5:30 PM IST) on the last day of the month
+  workflow_dispatch:  # Allows manual trigger via GitHub UI
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"  # Set the required Python version
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas numpy yfinance requests
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas numpy yfinance requests  # Install the dependencies
 
-      - name: Run Strategy
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python strategy.py
+    - name: Run Strategy Script
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}  # Ensure the secrets are properly set
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python strategy.py  # Run the live signal generation script
+
+    - name: Commit and push results (optional)
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git add .
+        git commit -m "Automated monthly strategy update"
+        git push
