@@ -21,10 +21,6 @@ TOPN_LIST = [10, 15, 20]
 
 DATA_CACHE_FILE = "nifty200_price_data.csv"
 
-# Telegram
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
 # ==============================
 # LOAD SYMBOLS
 # ==============================
@@ -38,6 +34,7 @@ def load_symbols():
 # ==============================
 
 def get_data(symbols):
+
     if os.path.exists(DATA_CACHE_FILE):
         print("Loading cached price data...")
         return pd.read_csv(DATA_CACHE_FILE, index_col=0, parse_dates=True)
@@ -54,6 +51,7 @@ def get_data(symbols):
     )
 
     prices = {}
+
     for sym in symbols:
         try:
             prices[sym] = data[sym]["Close"]
@@ -70,17 +68,24 @@ def get_data(symbols):
 # ==============================
 
 def get_regime():
-    df = yf.download(BENCHMARK, start=START_DATE, end=END_DATE, auto_adjust=True, progress=False)
+
+    df = yf.download(BENCHMARK,
+                     start=START_DATE,
+                     end=END_DATE,
+                     auto_adjust=True,
+                     progress=False)
 
     # Flatten columns if needed
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
     price = df["Close"].dropna()
+
     dma200 = price.rolling(200).mean()
     regime = (price > dma200)
 
     monthly_regime = regime.resample("ME").last()
+
     # Ensure boolean series
     monthly_regime = monthly_regime.astype(bool)
 
@@ -91,6 +96,7 @@ def get_regime():
 # ==============================
 
 def run_strategy(monthly_prices, regime, lookback, top_n):
+
     returns = monthly_prices.pct_change()
 
     weights = pd.DataFrame(
@@ -102,9 +108,9 @@ def run_strategy(monthly_prices, regime, lookback, top_n):
     # Align regime index
     regime = regime.reindex(monthly_prices.index).fillna(False)
 
-    # To track the buy/sell signals
-    bought_stocks = set()  # Set of stocks bought
-    sold_stocks = set()    # Set of stocks sold
+    # Store signals for buy and sell
+    buy_signals = []
+    sell_signals = []
 
     for i in range(lookback, len(monthly_prices)):
 
@@ -117,18 +123,17 @@ def run_strategy(monthly_prices, regime, lookback, top_n):
         ) - 1
 
         top = momentum.sort_values(ascending=False).head(top_n).index
-        current_buys = set(top)
+        previous_top = weights.loc[monthly_prices.index[i-1]].nlargest(top_n).index
 
-        # Compare to previous buy list and determine which to buy and which to sell
-        new_buys = current_buys - bought_stocks
-        new_sells = bought_stocks - current_buys
+        # Identify buy/sell signals
+        new_buys = list(set(top) - set(previous_top))
+        sells = list(set(previous_top) - set(top))
 
-        # Add new buys to the portfolio
-        bought_stocks.update(new_buys)
-        # Remove old sells from the portfolio
-        sold_stocks.update(new_sells)
+        if new_buys:
+            buy_signals.append((monthly_prices.index[i], new_buys))
+        if sells:
+            sell_signals.append((monthly_prices.index[i], sells))
 
-        # Update weights
         weights.loc[monthly_prices.index[i], top] = 1.0 / top_n
 
     weights = weights.shift(1).fillna(0)
@@ -139,13 +144,14 @@ def run_strategy(monthly_prices, regime, lookback, top_n):
     portfolio_returns = (weights * returns).sum(axis=1) - cost
     equity = (1 + portfolio_returns).cumprod()
 
-    return equity, bought_stocks, sold_stocks
+    return equity, buy_signals, sell_signals
 
 # ==============================
 # TELEGRAM ALERT
 # ==============================
 
 def telegram_alert(message: str):
+
     if TELEGRAM_TOKEN is None or CHAT_ID is None:
         print("Telegram not configured")
         return
@@ -155,53 +161,31 @@ def telegram_alert(message: str):
     requests.get(url)
 
 # ==============================
-# PERFORMANCE
-# ==============================
-
-def calculate_stats(equity):
-    if len(equity) < 12:
-        return np.nan, np.nan
-
-    years = len(equity) / 12
-    cagr = equity.iloc[-1] ** (1 / years) - 1
-
-    rolling_max = equity.cummax()
-    drawdown = equity / rolling_max - 1
-    max_dd = drawdown.min()
-
-    return cagr, max_dd
-
-# ==============================
-# OOS SPLIT
-# ==============================
-
-def split_oos(equity):
-    oos = equity[equity.index >= SPLIT_DATE]
-
-    if len(oos) < 12:
-        return np.nan, np.nan
-
-    return calculate_stats(oos)
-
-# ==============================
 # MAIN
 # ==============================
 
 def main():
+
     print("Loading symbols...")
     symbols = load_symbols()
 
     prices = get_data(symbols)
+
     regime = get_regime()
 
     monthly_prices = prices.resample("ME").last()
 
     results = []
+
     print("\nRunning Stability Grid...\n")
 
     for lookback in LOOKBACK_LIST:
         for top_n in TOPN_LIST:
-            equity, bought_stocks, sold_stocks = run_strategy(monthly_prices, regime, lookback, top_n)
+
+            equity, buy_signals, sell_signals = run_strategy(monthly_prices,
+                                                             regime,
+                                                             lookback,
+                                                             top_n)
 
             full_cagr, full_dd = calculate_stats(equity)
             oos_cagr, oos_dd = split_oos(equity)
@@ -215,17 +199,19 @@ def main():
                 "OOS_MaxDD": oos_dd
             })
 
+            # Prepare Telegram message
+            buy_msg = "\n".join([f"Date: {date}, Buy: {', '.join(stocks)}" for date, stocks in buy_signals])
+            sell_msg = "\n".join([f"Date: {date}, Sell: {', '.join(stocks)}" for date, stocks in sell_signals])
+
+            msg = f"Strategy run complete.\nTop N: {top_n}, Lookback: {lookback}\nCAGR: {oos_cagr:.2%}\nBuy Signals:\n{buy_msg}\nSell Signals:\n{sell_msg}"
+
+            # Send the message
+            telegram_alert(msg)
+
             print(f"Completed → Lookback {lookback} | Top {top_n}")
 
-            # Format the Telegram message to include buy/sell actions
-            message = (f"Strategy run complete.\n"
-                       f"Top N: {top_n}, Lookback: {lookback}\n"
-                       f"CAGR: {oos_cagr:.2%}\n"
-                       f"Buy signals: {', '.join(new_buys) if new_buys else 'None'}\n"
-                       f"Sell signals: {', '.join(new_sells) if new_sells else 'None'}\n")
-            telegram_alert(message)
-
     results_df = pd.DataFrame(results)
+
     print("\n===== PARAMETER STABILITY RESULTS =====\n")
     print(results_df.sort_values("OOS_CAGR", ascending=False))
 
