@@ -1,13 +1,9 @@
-name: Run Strategy Monthly and Weekly
+name: Run Strategy Monthly
 
 on:
   schedule:
-    # Run at 6:30 PM IST (1:00 PM UTC) on the last day of each month.
-    - cron: "0 13 28-31 * *"  # Runs on the last day of the month at 1:00 PM UTC (6:30 PM IST)
-    
-    # Run at 6:30 PM IST (1:00 PM UTC) every Friday.
-    - cron: "0 13 * * 5"  # Runs every Friday at 1:00 PM UTC (6:30 PM IST)
-
+    # Runs on the last day of each month at 13:00 UTC (which is 5:30 PM IST)
+    - cron: "0 13 28-31 * *"  # Trigger on 28th-31st of each month
   workflow_dispatch:  # Allows manual trigger via GitHub UI
 
 jobs:
@@ -15,21 +11,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v3  # Checkout the repository
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: "3.10"  # Set the Python version for the environment
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy yfinance requests
+          pip install pandas numpy yfinance requests  # Install required dependencies
 
       - name: Run Strategy
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}  # Ensure that your secrets are set in GitHub
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}  # Use the environment variables for secure storage
         run: |
           python strategy.py  # Run the strategy script
